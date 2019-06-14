@@ -213,6 +213,7 @@ venc_dev::~venc_dev()
                 iter->info.nTimeStamp);
         }
         m_roilist.clear();
+        mRoiRegionList.clear();
         pthread_mutex_unlock(&m_roilock);
     }
     pthread_mutex_destroy(&m_roilock);
@@ -435,7 +436,7 @@ void* venc_dev::async_venc_message_thread (void *input)
         gettimeofday(&tv,NULL);
         OMX_U64 time_diff = (tv.tv_sec * 1000000ULL + tv.tv_usec) -
                 (stats.prev_tv.tv_sec * 1000000ULL + stats.prev_tv.tv_usec);
-        if (time_diff >= 5000000) {
+        if (time_diff >= 1000000) {
             OMX_U32 num_fbd = omx->handle->fbd - stats.prev_fbd;
             if (stats.prev_tv.tv_sec && num_fbd && time_diff) {
                 float framerate = num_fbd * 1000000/(float)time_diff;
@@ -786,6 +787,13 @@ bool venc_dev::handle_input_extradata(struct v4l2_buffer buf)
         }
         filled_len += data->nSize;
         data = (OMX_OTHER_EXTRADATATYPE *)((char *)data + data->nSize);
+    } else {
+        // m_roilist didn't contain any ROI info with OMX_IndexConfigVideoRoiInfo.
+        // then we can check mRoiRegionList which may contain the roi from vendor extension.
+        OMX_U32 freeSize = input_extradata_info.buffer_size - filled_len;
+        OMX_U32 appendSize = append_extradata_roi_region_qp_info(data, nTimeStamp, freeSize);
+        filled_len += appendSize;
+        data = (OMX_OTHER_EXTRADATATYPE *)((char *)data + appendSize);
     }
 
     if (m_roi_enabled) {
@@ -965,7 +973,7 @@ int venc_dev::venc_set_format(int format)
 OMX_ERRORTYPE venc_dev::venc_get_supported_profile_level(OMX_VIDEO_PARAM_PROFILELEVELTYPE *profileLevelType)
 {
     OMX_ERRORTYPE eRet = OMX_ErrorNone;
-    struct v4l2_queryctrl profile_cap, level_cap;
+    struct v4l2_queryctrl profile_cap, level_cap, tier_cap;
     int v4l2_profile;
     int avc_profiles[5] = { QOMX_VIDEO_AVCProfileConstrainedBaseline,
                             QOMX_VIDEO_AVCProfileBaseline,
@@ -979,6 +987,7 @@ OMX_ERRORTYPE venc_dev::venc_get_supported_profile_level(OMX_VIDEO_PARAM_PROFILE
     if (!profileLevelType)
         return OMX_ErrorBadParameter;
 
+    memset(&tier_cap, 0, sizeof(struct v4l2_queryctrl));
     memset(&level_cap, 0, sizeof(struct v4l2_queryctrl));
     memset(&profile_cap, 0, sizeof(struct v4l2_queryctrl));
 
@@ -989,7 +998,8 @@ OMX_ERRORTYPE venc_dev::venc_get_supported_profile_level(OMX_VIDEO_PARAM_PROFILE
         level_cap.id = V4L2_CID_MPEG_VIDC_VIDEO_VP8_PROFILE_LEVEL;
         profile_cap.id = V4L2_CID_MPEG_VIDEO_VP8_PROFILE;
     } else if (m_sVenc_cfg.codectype == V4L2_PIX_FMT_HEVC) {
-        level_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_TIER;
+        tier_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_TIER;
+        level_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_LEVEL;
         profile_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_PROFILE;
     } else {
         DEBUG_PRINT_ERROR("get_parameter: OMX_IndexParamVideoProfileLevelQuerySupported Invalid codec");
@@ -1010,10 +1020,21 @@ OMX_ERRORTYPE venc_dev::venc_get_supported_profile_level(OMX_VIDEO_PARAM_PROFILE
         }
     }
 
+    if (tier_cap.id) {
+        if(!venc_query_cap(tier_cap)) {
+            DEBUG_PRINT_ERROR("Getting capabilities for tier failed");
+            return OMX_ErrorHardware;
+        }
+    }
+
     /* Get the corresponding omx level from v4l2 level */
     if (!profile_level_converter::convert_v4l2_level_to_omx(m_sVenc_cfg.codectype, level_cap.maximum, (int *)&profileLevelType->eLevel)) {
         DEBUG_PRINT_ERROR("Invalid level, cannot find corresponding v4l2 level : %d ", level_cap.maximum);
         return OMX_ErrorHardware;
+    }
+    if (m_sVenc_cfg.codectype == V4L2_PIX_FMT_HEVC && tier_cap.maximum == V4L2_MPEG_VIDEO_HEVC_TIER_HIGH) {
+        /* handle HEVC high tier */
+        profileLevelType->eLevel <<= 1;
     }
 
     /* For given profile index get corresponding profile that needs to be supported */
@@ -2720,8 +2741,9 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
                             DEBUG_PRINT_INFO("ENC_CONFIG: Input Color = NV12 Linear");
                         } else if (handle->format == HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC ||
                                    handle->format == HAL_PIXEL_FORMAT_YCbCr_420_P010_VENUS) {
-                            if ((m_codec == OMX_VIDEO_CodingHEVC) &&
-                                 (codec_profile.profile == V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10)) {
+                            if (((m_codec == OMX_VIDEO_CodingHEVC) &&
+                                 (codec_profile.profile == V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10)) ||
+                                     (csc_enable == true)) {
                                 m_sVenc_cfg.inputformat =
                                     (handle->format == HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC)?
                                              V4L2_PIX_FMT_NV12_TP10_UBWC :
@@ -2756,12 +2778,6 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
 
                         if (csc_enable) {
                             struct v4l2_control control;
-
-                            /* Set Camera Color Space. When we set CSC, this will be passed to
-                               fimrware as the InputPrimaries */
-                            venc_set_colorspace(colorData.colorPrimaries, colorData.range,
-                                                colorData.transfer, colorData.matrixCoefficients);
-
                             control.id = V4L2_CID_MPEG_VIDC_VIDEO_VPE_CSC;
                             control.value = V4L2_MPEG_MSM_VIDC_ENABLE;
                             if (ioctl(m_nDriver_fd, VIDIOC_S_CTRL, &control)) {
@@ -2777,11 +2793,6 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
                                         DEBUG_PRINT_INFO("venc_empty_buf: Enabled VPE CSC custom matrix");
                                     }
                                 }
-                                /* Change Colorspace to 709*/
-                                colorData.colorPrimaries =  ColorPrimaries_BT709_5;
-                                colorData.range = Range_Limited;
-                                colorData.transfer = Transfer_sRGB;
-                                colorData.matrixCoefficients = MatrixCoEff_BT709_5;
                             }
                         }
 
@@ -2906,6 +2917,44 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
         }
     }
 
+    if (!streaming[OUTPUT_PORT]) {
+        enum v4l2_buf_type buf_type;
+        buf_type=V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+        int ret;
+
+        if (!downscalar_enabled) {
+            OMX_U32 inp_width = 0, inp_height = 0, out_width = 0, out_height = 0;
+
+            if (!venc_get_dimensions(PORT_INDEX_IN, &inp_width, &inp_height)) {
+                return false;
+            }
+
+            if (!venc_get_dimensions(PORT_INDEX_OUT, &out_width, &out_height)) {
+                return false;
+            }
+
+            // Tiling in HEIC requires output WxH to be Tile size; difference is permitted
+            if (!(m_codec == OMX_VIDEO_CodingImageHEIC) &&
+                inp_width * inp_height != out_width * out_height) {
+                DEBUG_PRINT_ERROR("Downscalar is disabled and input/output dimenstions don't match");
+                DEBUG_PRINT_ERROR("Input WxH : %dx%d Output WxH : %dx%d",inp_width, inp_height, out_width, out_height);
+                return false;
+            }
+        }
+
+        ret = ioctl(m_nDriver_fd, VIDIOC_STREAMON, &buf_type);
+
+        if (ret) {
+            DEBUG_PRINT_ERROR("Failed to call streamon");
+            if (errno == EBUSY) {
+                hw_overload = true;
+            }
+            return false;
+        } else {
+            streaming[OUTPUT_PORT] = true;
+        }
+    }
+
     extra_idx = EXTRADATA_IDX(num_input_planes);
 
     if (extra_idx && (extra_idx < VIDEO_MAX_PLANES)) {
@@ -2978,44 +3027,6 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
     }
 
     etb++;
-
-    if (!streaming[OUTPUT_PORT]) {
-        enum v4l2_buf_type buf_type;
-        buf_type=V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-        int ret;
-
-        if (!downscalar_enabled) {
-            OMX_U32 inp_width = 0, inp_height = 0, out_width = 0, out_height = 0;
-
-            if (!venc_get_dimensions(PORT_INDEX_IN, &inp_width, &inp_height)) {
-                return false;
-            }
-
-            if (!venc_get_dimensions(PORT_INDEX_OUT, &out_width, &out_height)) {
-                return false;
-            }
-
-            // Tiling in HEIC requires output WxH to be Tile size; difference is permitted
-            if (!(m_codec == OMX_VIDEO_CodingImageHEIC) &&
-                inp_width * inp_height != out_width * out_height) {
-                DEBUG_PRINT_ERROR("Downscalar is disabled and input/output dimenstions don't match");
-                DEBUG_PRINT_ERROR("Input WxH : %dx%d Output WxH : %dx%d",inp_width, inp_height, out_width, out_height);
-                return false;
-            }
-        }
-
-        ret = ioctl(m_nDriver_fd, VIDIOC_STREAMON, &buf_type);
-
-        if (ret) {
-            DEBUG_PRINT_ERROR("Failed to call streamon");
-            if (errno == EBUSY) {
-                hw_overload = true;
-            }
-            return false;
-        } else {
-            streaming[OUTPUT_PORT] = true;
-        }
-    }
 
     return true;
 }
@@ -3427,7 +3438,7 @@ bool venc_dev::set_nP_frames(unsigned long nPframes)
     struct v4l2_control control;
 
     control.id = V4L2_CID_MPEG_VIDEO_GOP_SIZE;
-    control.value = nPframes;
+    control.value = (nPframes > VENC_INFINITE_GOP) ? VENC_INFINITE_GOP : nPframes;
     int rc = ioctl(m_nDriver_fd, VIDIOC_S_CTRL, &control);
 
     if (rc) {
@@ -3444,7 +3455,7 @@ bool venc_dev::set_nB_frames(unsigned long nBframes)
     struct v4l2_control control;
 
     control.id = V4L2_CID_MPEG_VIDEO_B_FRAMES;
-    control.value = nBframes;
+    control.value = (nBframes > VENC_INFINITE_GOP) ? VENC_INFINITE_GOP : nBframes;
     int rc = ioctl(m_nDriver_fd, VIDIOC_S_CTRL, &control);
 
     if (rc) {
@@ -4616,5 +4627,138 @@ bool venc_dev::venc_set_hdr_info(const MasteringDisplay& mastering_disp_info,
     }
 
     return true;
+}
+
+/*=================================================================================
+ * Function:   venc_set_roi_region_qp_info
+ * @brief      set the config of OMX_QTI_VIDEO_CONFIG_ROI_RECT_REGION_INFO and store
+ *             the info in the list
+ * Parameters:
+ * @param      OMX_QTI_VIDEO_CONFIG_ROI_RECT_REGION_INFO *roiRegionInfo:
+ *             the config to be set
+ * Return value:
+ *             bool: return true if the config is set successfully
+*==================================================================================*/
+bool venc_dev::venc_set_roi_region_qp_info(OMX_QTI_VIDEO_CONFIG_ROI_RECT_REGION_INFO *roiRegionInfo)
+{
+    if (!m_roi_enabled) {
+        DEBUG_PRINT_ERROR("ROI-Region: roi info not enabled");
+        return false;
+    }
+    if (!roiRegionInfo) {
+        DEBUG_PRINT_ERROR("ROI-Region: no region info present");
+        return false;
+    }
+    if (m_sVenc_cfg.codectype != V4L2_PIX_FMT_H264 &&
+            m_sVenc_cfg.codectype != V4L2_PIX_FMT_HEVC) {
+        DEBUG_PRINT_ERROR("ROI-Region: is not supported for %d codec",
+                (OMX_U32) m_sVenc_cfg.codectype);
+        return false;
+    }
+
+    pthread_mutex_lock(&m_roilock);
+    DEBUG_PRINT_LOW("ROI-Region: add region with timestamp %lld us.", roiRegionInfo->nTimeStamp);
+    mRoiRegionList.push_back(*roiRegionInfo);
+    pthread_mutex_unlock(&m_roilock);
+    return true;
+}
+
+/*=================================================================================
+ * Function:   append_extradata_roi_region_qp_info
+ * @brief      fill the roi info in the extradata of input Buffer
+ * Parameters:
+ * @param      OMX_OTHER_EXTRADATATYPE *data: the address of the extradata buffer
+ *             OMX_TICKS timestamp:  the timestamp of the input Buffer
+ *             OMX_U32: the available size of the extradata buffer
+ * Return value:
+ *             OMX_U32: the filled size
+*==================================================================================*/
+OMX_U32 venc_dev::append_extradata_roi_region_qp_info(OMX_OTHER_EXTRADATATYPE *data,
+        OMX_TICKS timestamp, OMX_U32 freeSize)
+{
+    bool found = false;
+    pthread_mutex_lock(&m_roilock);
+    if (mRoiRegionList.size() == 0) {
+        pthread_mutex_unlock(&m_roilock);
+        return 0;
+    }
+    std::list<OMX_QTI_VIDEO_CONFIG_ROI_RECT_REGION_INFO>::iterator it =
+            mRoiRegionList.begin();
+    while (it != mRoiRegionList.end()) {
+        if (it->nTimeStamp < timestamp) {
+            it = mRoiRegionList.erase(it);
+            continue;
+        } else if (it->nTimeStamp == timestamp) {
+            found = true;
+            break;
+        }
+        it++;
+    }
+    pthread_mutex_unlock(&m_roilock);
+    if (!found) {
+        DEBUG_PRINT_LOW("ROI-Region: no region roi data was found");
+        return 0;
+    }
+    OMX_QTI_VIDEO_CONFIG_ROI_RECT_REGION_INFO regionInfo = *it;
+    bool isHevc = m_sVenc_cfg.codectype == V4L2_PIX_FMT_HEVC ? true:false;
+    OMX_U32 height = m_sVenc_cfg.dvs_height;
+    OMX_U32 width = m_sVenc_cfg.dvs_width;
+    OMX_U32 mbAlign = isHevc ? 32 : 16;
+    OMX_U8 mbBit = isHevc ? 5 : 4;
+    OMX_U32 mbRow = ALIGN(width, mbAlign) / mbAlign;
+    OMX_U32 mbCol = ALIGN(height, mbAlign) / mbAlign;
+    OMX_U32 numBytes, mbLeft, mbTop, mbRight, mbBottom = 0;
+    OMX_S8 deltaQP = 0;
+    DEBUG_PRINT_LOW("ROI-Region: clip(%ux%u: %s), mb(%ux%u), region(num:%u, ts:%lld)",
+            width, height, isHevc ? "hevc" : "avc", mbRow, mbCol, regionInfo.nRegionNum,
+            regionInfo.nTimeStamp);
+    OMX_U32 mbRowAligned = ALIGN(mbRow, 8);
+    numBytes = mbRowAligned * mbCol * 2;
+    OMX_U32 numBytesAligned = ALIGN(numBytes, 4);
+
+    data->nDataSize = ALIGN(sizeof(struct msm_vidc_roi_deltaqp_payload), 256)
+                        + numBytesAligned;
+    data->nSize = ALIGN(sizeof(OMX_OTHER_EXTRADATATYPE) + data->nDataSize, 4);
+    if (data->nSize > freeSize) {
+        DEBUG_PRINT_ERROR("ROI-Region: Buffer size(%u) is less than ROI extradata size(%u)",
+                 freeSize, data->nSize);
+        data->nDataSize = 0;
+        data->nSize = 0;
+        return 0;
+    }
+
+    data->nVersion.nVersion = OMX_SPEC_VERSION;
+    data->nPortIndex = 0;
+    data->eType = (OMX_EXTRADATATYPE)MSM_VIDC_EXTRADATA_ROI_QP;
+    struct msm_vidc_roi_deltaqp_payload *roiData =
+            (struct msm_vidc_roi_deltaqp_payload *)(data->data);
+    roiData->b_roi_info = true;
+    roiData->mbi_info_size = numBytesAligned;
+    roiData->data[0] = (unsigned int)(ALIGN(&roiData->data[1], 256)
+            - (unsigned long)roiData->data);
+    OMX_U16* exDataBuf = (OMX_U16*)((OMX_U8*)roiData->data + roiData->data[0]);
+    OMX_U32 mb = 0;
+    OMX_U16 *pData = NULL;
+
+    for (OMX_U8 i = 0; i < regionInfo.nRegionNum; i++) {
+        mbLeft = regionInfo.nRegions[i].nLeft >> mbBit;
+        mbTop = regionInfo.nRegions[i].nTop >> mbBit;
+        mbRight = regionInfo.nRegions[i].nRight >> mbBit;
+        mbBottom = regionInfo.nRegions[i].nBottom >> mbBit;
+        deltaQP = regionInfo.nRegions[i].nDeltaQP;
+        if (mbLeft >= mbRow || mbRight >= mbRow
+                || mbTop >= mbCol || mbBottom >= mbCol) {
+            continue;
+        }
+        for (OMX_U32 row = mbTop; row <= mbBottom; row++) {
+            for (OMX_U32 col = mbLeft; col <= mbRight; col++) {
+                mb = row * mbRowAligned + col;
+                pData = exDataBuf + mb;
+               *pData = (1 << 11) | ((deltaQP & 0x3F) << 4);
+            }
+        }
+    }
+    DEBUG_PRINT_LOW("ROI-Region: set roi: raw size: %u", numBytesAligned);
+    return data->nSize;
 }
 

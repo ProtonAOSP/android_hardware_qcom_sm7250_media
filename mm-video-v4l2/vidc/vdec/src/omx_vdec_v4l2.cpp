@@ -732,6 +732,7 @@ omx_vdec::omx_vdec(): m_error_propogated(false),
     m_color_space = EXCEPT_BT2020;
 
     init_color_aspects_map();
+    m_hist_metadata.stat_len = 0;
 
     profile_level_converter::init();
     clientSet_profile_level.eProfile = 0;
@@ -2813,7 +2814,7 @@ bool inline omx_vdec::vdec_query_cap(struct v4l2_queryctrl &cap)
 OMX_ERRORTYPE omx_vdec::get_supported_profile_level(OMX_VIDEO_PARAM_PROFILELEVELTYPE *profileLevelType)
 {
     OMX_ERRORTYPE eRet = OMX_ErrorNone;
-    struct v4l2_queryctrl profile_cap, level_cap;
+    struct v4l2_queryctrl profile_cap, level_cap, tier_cap;
     int v4l2_profile;
     int avc_profiles[5] = { QOMX_VIDEO_AVCProfileConstrainedBaseline,
                             QOMX_VIDEO_AVCProfileBaseline,
@@ -2833,6 +2834,7 @@ OMX_ERRORTYPE omx_vdec::get_supported_profile_level(OMX_VIDEO_PARAM_PROFILELEVEL
     if (!profileLevelType)
         return OMX_ErrorBadParameter;
 
+    memset(&tier_cap, 0, sizeof(struct v4l2_queryctrl));
     memset(&level_cap, 0, sizeof(struct v4l2_queryctrl));
     memset(&profile_cap, 0, sizeof(struct v4l2_queryctrl));
 
@@ -2845,7 +2847,8 @@ OMX_ERRORTYPE omx_vdec::get_supported_profile_level(OMX_VIDEO_PARAM_PROFILELEVEL
         level_cap.id = V4L2_CID_MPEG_VIDC_VIDEO_VP9_LEVEL;
         profile_cap.id = V4L2_CID_MPEG_VIDEO_VP9_PROFILE;
     } else if (output_capability == V4L2_PIX_FMT_HEVC) {
-        level_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_TIER;
+        tier_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_TIER;
+        level_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_LEVEL;
         profile_cap.id = V4L2_CID_MPEG_VIDEO_HEVC_PROFILE;
     } else if (output_capability == V4L2_PIX_FMT_MPEG2) {
         level_cap.id = V4L2_CID_MPEG_VIDC_VIDEO_MPEG2_LEVEL;
@@ -2869,10 +2872,21 @@ OMX_ERRORTYPE omx_vdec::get_supported_profile_level(OMX_VIDEO_PARAM_PROFILELEVEL
         }
     }
 
+    if (tier_cap.id) {
+        if(!vdec_query_cap(tier_cap)) {
+            DEBUG_PRINT_ERROR("Getting capabilities for tier failed");
+            return OMX_ErrorHardware;
+        }
+    }
+
     /* Get the corresponding omx level from v4l2 level */
     if (!profile_level_converter::convert_v4l2_level_to_omx(output_capability, level_cap.maximum, (int *)&profileLevelType->eLevel)) {
         DEBUG_PRINT_ERROR("Invalid level, cannot find corresponding v4l2 level : %d ", level_cap.maximum);
         return OMX_ErrorHardware;
+    }
+    if (output_capability == V4L2_PIX_FMT_HEVC && tier_cap.maximum == V4L2_MPEG_VIDEO_HEVC_TIER_HIGH) {
+        /* handle HEVC high tier */
+        profileLevelType->eLevel <<= 1;
     }
 
     /* For given profile index get corresponding profile that needs to be supported */
@@ -3180,31 +3194,6 @@ OMX_ERRORTYPE  omx_vdec::set_config(OMX_IN OMX_HANDLETYPE      hComp,
                     (int)config->nPortIndex);
             ret = OMX_ErrorBadPortIndex;
         }
-
-        return ret;
-    } else if ((int)configIndex == (int)OMX_QcomIndexConfigPictureTypeDecode) {
-        OMX_QCOM_VIDEO_CONFIG_PICTURE_TYPE_DECODE *config =
-            (OMX_QCOM_VIDEO_CONFIG_PICTURE_TYPE_DECODE *)configData;
-        struct v4l2_control control;
-        DEBUG_PRINT_LOW("Set picture type decode: %d", config->eDecodeType);
-        control.id = V4L2_CID_MPEG_VIDC_VIDEO_PICTYPE_DEC_MODE;
-
-        switch (config->eDecodeType) {
-            case OMX_QCOM_PictypeDecode_I:
-                control.value = V4L2_MPEG_VIDC_VIDEO_PICTYPE_DECODE_I;
-                break;
-            case OMX_QCOM_PictypeDecode_IPB:
-            default:
-                control.value = (V4L2_MPEG_VIDC_VIDEO_PICTYPE_DECODE_I|
-                                  V4L2_MPEG_VIDC_VIDEO_PICTYPE_DECODE_P|
-                                  V4L2_MPEG_VIDC_VIDEO_PICTYPE_DECODE_B);
-                break;
-        }
-
-        ret = (ioctl(drv_ctx.video_driver_fd, VIDIOC_S_CTRL, &control) < 0) ?
-                OMX_ErrorUnsupportedSetting : OMX_ErrorNone;
-        if (ret)
-            DEBUG_PRINT_ERROR("Failed to set picture type decode");
 
         return ret;
     } else if ((int)configIndex == (int)OMX_IndexConfigPriority) {
@@ -6411,11 +6400,6 @@ int omx_vdec::async_message_process (void *context, void* message)
                    if (omxhdr->nFilledLen) {
                        omxhdr->nFlags |= OMX_BUFFERFLAG_ENDOFFRAME;
                    }
-                   if (v4l2_buf_ptr->flags & V4L2_BUF_FLAG_KEYFRAME) {
-                       omxhdr->nFlags |= OMX_BUFFERFLAG_SYNCFRAME;
-                   } else {
-                       omxhdr->nFlags &= ~OMX_BUFFERFLAG_SYNCFRAME;
-                   }
                    if (v4l2_buf_ptr->flags & V4L2_BUF_FLAG_READONLY) {
                         omxhdr->nFlags |= OMX_BUFFERFLAG_READONLY;
                         DEBUG_PRINT_LOW("F_B_D: READONLY BUFFER - REFERENCE WITH F/W fd = %d",
@@ -6437,12 +6421,14 @@ int omx_vdec::async_message_process (void *context, void* message)
 
                    if (v4l2_buf_ptr->flags & V4L2_BUF_FLAG_KEYFRAME) {
                        output_respbuf->pic_type = PICTURE_TYPE_I;
+                       omxhdr->nFlags |= OMX_BUFFERFLAG_SYNCFRAME;
                    }
                    if (v4l2_buf_ptr->flags & V4L2_BUF_FLAG_PFRAME) {
                        output_respbuf->pic_type = PICTURE_TYPE_P;
                    }
                    if (v4l2_buf_ptr->flags & V4L2_BUF_FLAG_BFRAME) {
                        output_respbuf->pic_type = PICTURE_TYPE_B;
+                       omxhdr->nFlags |= QOMX_VIDEO_BUFFERFLAG_BFRAME;
                    }
 
                    if (vdec_msg->msgdata.output_frame.len) {
@@ -7806,12 +7792,12 @@ bool omx_vdec::handle_mastering_display_color_info(void* data)
     HDRStaticInfo* hdr_info = &m_internal_hdr_info.sInfo;
     bool internal_disp_changed_flag = false;
 
-    internal_disp_changed_flag |= (hdr_info->sType1.mR.x != mastering_display_payload->nDisplayPrimariesX[0]) ||
-        (hdr_info->sType1.mR.y != mastering_display_payload->nDisplayPrimariesY[0]);
-    internal_disp_changed_flag |= (hdr_info->sType1.mG.x != mastering_display_payload->nDisplayPrimariesX[1]) ||
-        (hdr_info->sType1.mG.y != mastering_display_payload->nDisplayPrimariesY[1]);
-    internal_disp_changed_flag |= (hdr_info->sType1.mB.x != mastering_display_payload->nDisplayPrimariesX[2]) ||
-        (hdr_info->sType1.mB.y != mastering_display_payload->nDisplayPrimariesY[2]);
+    internal_disp_changed_flag |= (hdr_info->sType1.mG.x != mastering_display_payload->nDisplayPrimariesX[0]) ||
+        (hdr_info->sType1.mG.y != mastering_display_payload->nDisplayPrimariesY[0]);
+    internal_disp_changed_flag |= (hdr_info->sType1.mB.x != mastering_display_payload->nDisplayPrimariesX[1]) ||
+        (hdr_info->sType1.mB.y != mastering_display_payload->nDisplayPrimariesY[1]);
+    internal_disp_changed_flag |= (hdr_info->sType1.mR.x != mastering_display_payload->nDisplayPrimariesX[2]) ||
+        (hdr_info->sType1.mR.y != mastering_display_payload->nDisplayPrimariesY[2]);
 
     internal_disp_changed_flag |= (hdr_info->sType1.mW.x != mastering_display_payload->nWhitePointX) ||
         (hdr_info->sType1.mW.y != mastering_display_payload->nWhitePointY);
@@ -7825,12 +7811,12 @@ bool omx_vdec::handle_mastering_display_color_info(void* data)
         (hdr_info->sType1.mMinDisplayLuminance != mastering_display_payload->nMinDisplayMasteringLuminance);
 
     if (internal_disp_changed_flag) {
-        hdr_info->sType1.mR.x = mastering_display_payload->nDisplayPrimariesX[0];
-        hdr_info->sType1.mR.y = mastering_display_payload->nDisplayPrimariesY[0];
-        hdr_info->sType1.mG.x = mastering_display_payload->nDisplayPrimariesX[1];
-        hdr_info->sType1.mG.y = mastering_display_payload->nDisplayPrimariesY[1];
-        hdr_info->sType1.mB.x = mastering_display_payload->nDisplayPrimariesX[2];
-        hdr_info->sType1.mB.y = mastering_display_payload->nDisplayPrimariesY[2];
+        hdr_info->sType1.mG.x = mastering_display_payload->nDisplayPrimariesX[0];
+        hdr_info->sType1.mG.y = mastering_display_payload->nDisplayPrimariesY[0];
+        hdr_info->sType1.mB.x = mastering_display_payload->nDisplayPrimariesX[1];
+        hdr_info->sType1.mB.y = mastering_display_payload->nDisplayPrimariesY[1];
+        hdr_info->sType1.mR.x = mastering_display_payload->nDisplayPrimariesX[2];
+        hdr_info->sType1.mR.y = mastering_display_payload->nDisplayPrimariesY[2];
         hdr_info->sType1.mW.x = mastering_display_payload->nWhitePointX;
         hdr_info->sType1.mW.y = mastering_display_payload->nWhitePointY;
 
@@ -7952,6 +7938,22 @@ void omx_vdec::get_preferred_hdr_info(HDRStaticInfo& finalHDRInfo)
         preferredHDRInfo.sType1.mMaxContentLightLevel : defaultHDRInfo.sType1.mMaxContentLightLevel;
     finalHDRInfo.sType1.mMaxFrameAverageLightLevel = (preferredHDRInfo.sType1.mMaxFrameAverageLightLevel != 0) ?
         preferredHDRInfo.sType1.mMaxFrameAverageLightLevel : defaultHDRInfo.sType1.mMaxFrameAverageLightLevel;
+}
+
+void omx_vdec::set_histogram_metadata(private_handle_t *private_handle)
+{
+    if (m_hist_metadata.stat_len != VIDEO_HISTOGRAM_STATS_SIZE || !private_handle)
+        return;
+
+    m_hist_metadata.display_width = m_extradata_misr.output_crop_rect.nWidth;
+    m_hist_metadata.display_height = m_extradata_misr.output_crop_rect.nHeight;
+    m_hist_metadata.decode_width = m_extradata_misr.output_width;
+    m_hist_metadata.decode_height = m_extradata_misr.output_height;
+
+    if (setMetaData(private_handle, SET_VIDEO_HISTOGRAM_STATS, (void*)&m_hist_metadata))
+        DEBUG_PRINT_HIGH("failed to set histogram video stats");
+
+    m_hist_metadata.stat_len = 0;
 }
 
 bool omx_vdec::handle_extradata(OMX_BUFFERHEADERTYPE *p_buf_hdr)
@@ -8122,13 +8124,22 @@ bool omx_vdec::handle_extradata(OMX_BUFFERHEADERTYPE *p_buf_hdr)
                 case MSM_VIDC_EXTRADATA_MASTERING_DISPLAY_COLOUR_SEI:
                     internal_hdr_info_changed_flag |= handle_mastering_display_color_info((void*)data->data);
                     break;
+                case MSM_VIDC_EXTRADATA_HDR_HIST:
+                    if (data->nDataSize != VIDEO_HISTOGRAM_STATS_SIZE) {
+                        DEBUG_PRINT_ERROR("Invalid HDR histogram extradata size %u", data->nDataSize);
+                        m_hist_metadata.stat_len = 0;
+                    } else {
+                        memcpy(m_hist_metadata.stats_info, data->data, VIDEO_HISTOGRAM_STATS_SIZE);
+                        m_hist_metadata.stat_len = VIDEO_HISTOGRAM_STATS_SIZE;
+                        m_hist_metadata.frame_type = (p_buf_hdr->nFlags & OMX_BUFFERFLAG_SYNCFRAME) ? QD_SYNC_FRAME : 0;
+                    }
+                    break;
                 case MSM_VIDC_EXTRADATA_NUM_CONCEALED_MB:
                 case MSM_VIDC_EXTRADATA_FRAME_RATE:
                 case MSM_VIDC_EXTRADATA_FRAME_QP:
                 case MSM_VIDC_EXTRADATA_FRAME_BITS_INFO:
                 case MSM_VIDC_EXTRADATA_S3D_FRAME_PACKING:
                 case MSM_VIDC_EXTRADATA_PANSCAN_WINDOW:
-                case MSM_VIDC_EXTRADATA_HDR_HIST:
                     // skip unused extra data
                     break;
                 default:
@@ -8173,6 +8184,7 @@ bool omx_vdec::handle_extradata(OMX_BUFFERHEADERTYPE *p_buf_hdr)
                 print_debug_hdr_color_info_mdata(&color_mdata);
                 print_debug_hdr10plus_metadata(color_mdata);
                 setMetaData(private_handle, COLOR_METADATA, (void*)&color_mdata);
+                set_histogram_metadata(private_handle);
         }
 
     }
