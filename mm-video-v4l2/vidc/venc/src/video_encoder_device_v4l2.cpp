@@ -89,6 +89,10 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define Log2(number, power)  { OMX_U32 temp = number; power = 0; while( (0 == (temp & 0x1)) &&  power < 16) { temp >>=0x1; power++; } }
 #define Q16ToFraction(q,num,den) { OMX_U32 power; Log2(q,power);  num = q >> power; den = 0x1 << (16 - power); }
 
+//TODO: remove once gerrit : 2680400 is merged
+#define VIDC_HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX  HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX
+#define VIDC_HAL_PIXEL_FORMAT_NV12_UBWC_FLEX HAL_PIXEL_FORMAT_NV12_UBWC_FLEX
+
 #define BUFFER_LOG_LOC "/data/vendor/media"
 
 #undef LOG_TAG
@@ -623,29 +627,6 @@ bailout:
     return ret;
 }
 
-inline int get_yuv_size(unsigned long fmt, int width, int height) {
-    unsigned int y_stride, uv_stride, y_sclines,
-                uv_sclines, y_plane, uv_plane;
-    unsigned int y_ubwc_plane = 0, uv_ubwc_plane = 0;
-    unsigned size = 0;
-
-    y_stride = VENUS_Y_STRIDE(fmt, width);
-    uv_stride = VENUS_UV_STRIDE(fmt, width);
-    y_sclines = VENUS_Y_SCANLINES(fmt, height);
-    uv_sclines = VENUS_UV_SCANLINES(fmt, height);
-
-    switch (fmt) {
-        case COLOR_FMT_NV12:
-            y_plane = y_stride * y_sclines;
-            uv_plane = uv_stride * uv_sclines;
-            size = MSM_MEDIA_ALIGN(y_plane + uv_plane, 4096);
-            break;
-         default:
-            break;
-    }
-    return size;
-}
-
 bool venc_dev::handle_input_extradata(struct v4l2_buffer buf)
 {
     unsigned int filled_len = 0;
@@ -1169,6 +1150,9 @@ OMX_ERRORTYPE venc_dev::allocate_extradata(struct extradata_buffer_info *extrada
             DEBUG_PRINT_ERROR("Failed to map extradata memory\n");
             venc_handle->free_ion_memory(&extradata_info->ion[i]);
             return OMX_ErrorInsufficientResources;
+        } else {
+            DEBUG_PRINT_HIGH("memset extradata buffer size %lu", extradata_info->buffer_size);
+            memset((char *)extradata_info->ion[i].uaddr, 0, extradata_info->buffer_size);
         }
     }
 #else
@@ -1193,9 +1177,10 @@ void venc_dev::free_extradata(struct extradata_buffer_info *extradata_info)
             extradata_info->ion[i].uaddr = NULL;
             venc_handle->free_ion_memory(&extradata_info->ion[i]);
         }
-        memset(extradata_info, 0, sizeof(*extradata_info));
-        extradata_info->ion[i].data_fd = -1;
+        memset(&extradata_info->ion[i].alloc_data, 0, sizeof(struct ion_allocation_data));
     }
+    extradata_info->buffer_size = 0;
+    extradata_info->count = 0;
     extradata_info->allocated = OMX_FALSE;
 #else
     (void)extradata_info;
@@ -1348,33 +1333,7 @@ int venc_dev::venc_input_log_buffers(OMX_BUFFERHEADERTYPE *pbuffer, int fd, int 
         unsigned char *pvirt = NULL, *ptemp = NULL;
         unsigned char *temp = (unsigned char *)pbuffer->pBuffer;
 
-        switch (inputformat) {
-            case V4L2_PIX_FMT_NV12:
-                color_format = COLOR_FMT_NV12;
-                break;
-            case V4L2_PIX_FMT_NV12_512:
-                color_format = COLOR_FMT_NV12_512;
-                break;
-            case V4L2_PIX_FMT_NV12_UBWC:
-                color_format = COLOR_FMT_NV12_UBWC;
-                break;
-            case V4L2_PIX_FMT_RGB32:
-                color_format = COLOR_FMT_RGBA8888;
-                break;
-            case V4L2_PIX_FMT_RGBA8888_UBWC:
-                color_format = COLOR_FMT_RGBA8888_UBWC;
-                break;
-            case V4L2_PIX_FMT_SDE_Y_CBCR_H2V2_P010_VENUS:
-                color_format = COLOR_FMT_P010;
-                break;
-            case V4L2_PIX_FMT_NV12_TP10_UBWC:
-                color_format = COLOR_FMT_NV12_BPP10_UBWC;
-                break;
-            default:
-                color_format = COLOR_FMT_NV12;
-                DEBUG_PRINT_LOW("Default format NV12 is set for logging [%lu]", inputformat);
-                break;
-        }
+        color_format = get_media_colorformat(inputformat);
 
         msize = VENUS_BUFFER_SIZE_USED(color_format, m_sVenc_cfg.input_width, m_sVenc_cfg.input_height,interlaced);
         const unsigned int extra_size = VENUS_EXTRADATA_SIZE(m_sVenc_cfg.input_width, m_sVenc_cfg.input_height);
@@ -2724,6 +2683,12 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
                         } else if (handle->format == HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC) {
                             m_sVenc_cfg.inputformat = V4L2_PIX_FMT_NV12_UBWC;
                             DEBUG_PRINT_INFO("ENC_CONFIG: Input Color = NV12_UBWC");
+                        } else if (handle->format == VIDC_HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX) {
+                             m_sVenc_cfg.inputformat = V4L2_PIX_FMT_NV12;
+                             DEBUG_PRINT_INFO("ENC_CONFIG: Input Color = NV12 FLEX");
+                        } else if (handle->format == VIDC_HAL_PIXEL_FORMAT_NV12_UBWC_FLEX) {
+                            m_sVenc_cfg.inputformat = V4L2_PIX_FMT_NV12_UBWC;
+                            DEBUG_PRINT_INFO("ENC_CONFIG: Input Color = NV12 UBWC FLEX");
                         } else if (handle->format == HAL_PIXEL_FORMAT_RGBA_8888) {
                             // In case of RGB, conversion to YUV is handled within encoder.
                             // Disregard the Colorspace in gralloc-handle in case of RGB and use
@@ -2800,6 +2765,13 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
                            as it is standard compliant */
                         venc_set_colorspace(colorData.colorPrimaries, colorData.range,
                                             colorData.transfer, colorData.matrixCoefficients);
+                        if ((handle->format == VIDC_HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX) ||
+                                (handle->format == VIDC_HAL_PIXEL_FORMAT_NV12_UBWC_FLEX)) {
+                            if (!venc_superframe_enable(handle)) {
+                                DEBUG_PRINT_ERROR("ERROR: Enabling Superframe");
+                                return false;
+                            }
+                        }
 
                         fmt.fmt.pix_mp.pixelformat = m_sVenc_cfg.inputformat;
                         fmt.fmt.pix_mp.height = m_sVenc_cfg.input_height;
@@ -2917,6 +2889,11 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
         }
     }
 
+    if (!handle_dynamic_config(bufhdr)) {
+        DEBUG_PRINT_ERROR("%s Failed to set dynamic configs", __func__);
+        return false;
+    }
+
     if (!streaming[OUTPUT_PORT]) {
         enum v4l2_buf_type buf_type;
         buf_type=V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
@@ -2991,11 +2968,6 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
         return false;
     }
 
-    if (!handle_dynamic_config(bufhdr)) {
-        DEBUG_PRINT_ERROR("%s Failed to set dynamic configs", __func__);
-        return false;
-    }
-
     VIDC_TRACE_INT_LOW("ETB-TS", bufhdr->nTimeStamp / 1000);
 
     if (bufhdr->nFlags & OMX_BUFFERFLAG_EOS)
@@ -3029,6 +3001,39 @@ bool venc_dev::venc_empty_buf(void *buffer, void *pmem_data_buf, unsigned index,
     etb++;
 
     return true;
+}
+
+unsigned long venc_dev::get_media_colorformat(unsigned long inputformat)
+{
+    unsigned long color_format;
+    switch (inputformat) {
+        case V4L2_PIX_FMT_NV12:
+            color_format = COLOR_FMT_NV12;
+            break;
+        case V4L2_PIX_FMT_NV12_512:
+            color_format = COLOR_FMT_NV12_512;
+            break;
+        case V4L2_PIX_FMT_NV12_UBWC:
+            color_format = COLOR_FMT_NV12_UBWC;
+            break;
+        case V4L2_PIX_FMT_RGB32:
+            color_format = COLOR_FMT_RGBA8888;
+            break;
+        case V4L2_PIX_FMT_RGBA8888_UBWC:
+            color_format = COLOR_FMT_RGBA8888_UBWC;
+            break;
+        case V4L2_PIX_FMT_SDE_Y_CBCR_H2V2_P010_VENUS:
+            color_format = COLOR_FMT_P010;
+            break;
+        case V4L2_PIX_FMT_NV12_TP10_UBWC:
+            color_format = COLOR_FMT_NV12_BPP10_UBWC;
+            break;
+        default:
+            color_format = COLOR_FMT_NV12_UBWC;
+            DEBUG_PRINT_ERROR("Unknown format %lx,default to NV12_UBWC", inputformat);
+            break;
+    }
+    return color_format;
 }
 
 bool venc_dev::venc_empty_batch(OMX_BUFFERHEADERTYPE *bufhdr, unsigned index)
@@ -3419,20 +3424,6 @@ bool venc_dev::venc_set_qp(OMX_U32 i_frame_qp, OMX_U32 p_frame_qp,OMX_U32 b_fram
     return true;
 }
 
-bool venc_dev::venc_set_voptiming_cfg( OMX_U32 TimeIncRes)
-{
-
-    struct venc_voptimingcfg vop_timing_cfg;
-
-    DEBUG_PRINT_LOW("venc_set_voptiming_cfg: TimeRes = %u",
-            (unsigned int)TimeIncRes);
-
-    vop_timing_cfg.voptime_resolution = TimeIncRes;
-
-    voptimecfg.voptime_resolution = vop_timing_cfg.voptime_resolution;
-    return true;
-}
-
 bool venc_dev::set_nP_frames(unsigned long nPframes)
 {
     struct v4l2_control control;
@@ -3685,85 +3676,6 @@ bool venc_dev::venc_set_intra_vop_refresh(OMX_BOOL intra_vop_refresh)
         DEBUG_PRINT_ERROR("ERROR: VOP Refresh is False, no effect");
     }
 
-    return true;
-}
-
-bool venc_dev::venc_calibrate_gop()
-{
-    int ratio, sub_gop_size, gop_size, nPframes, nBframes, nLayers;
-    int num_sub_gops_in_a_gop;
-    nPframes = intra_period.num_pframes;
-    nBframes = intra_period.num_bframes;
-    nLayers = temporal_layers_config.nPLayers + temporal_layers_config.nBLayers;
-
-    if (!nPframes && nLayers) {
-        DEBUG_PRINT_ERROR("nPframes should be non-zero when nLayers are present\n");
-        return false;
-    }
-
-    if (nBframes && !nPframes) {
-        DEBUG_PRINT_ERROR("nPframes should be non-zero when nBframes is non-zero\n");
-        return false;
-    }
-
-    if (nLayers > 1) { /*Multi-layer encoding*/
-        sub_gop_size = 1 << (nLayers - 1);
-        /* Actual GOP definition is nPframes + nBframes + 1 but for the sake of
-         * below calculations we are ignoring +1 . Ignoring +1 in below
-         * calculations is not a mistake but intentional.
-         */
-        gop_size = MAX(sub_gop_size, ROUND(nPframes + (nPframes * nBframes), sub_gop_size));
-        num_sub_gops_in_a_gop = gop_size/sub_gop_size;
-        if (nBframes) { /*Hier-B case*/
-        /*
-            * Frame Type--> I  B  B  B  P  B  B  B  P  I  B  B  P ...
-            * Layer -->     0  2  1  2  0  2  1  2  0  0  2  1  2 ...
-            * nPframes = 2, nBframes = 3, nLayers = 3
-            *
-            * Intention is to keep the intraperiod as close as possible to what is desired
-            * by the client while adjusting nPframes and nBframes to meet other constraints.
-            * eg1: Input by client: nPframes =  9, nBframes = 14, nLayers = 2
-            *    Output of this fn: nPframes = 12, nBframes = 12, nLayers = 2
-            *
-            * eg2: Input by client: nPframes = 9, nBframes = 4, nLayers = 2
-            *    Output of this fn: nPframes = 7, nBframes = 7, nLayers = 2
-            */
-            nPframes = num_sub_gops_in_a_gop;
-            nBframes = sub_gop_size - 1;
-        } else { /*Hier-P case*/
-            /*
-            * Frame Type--> I  P  P  P  P  P  P  P  I  P  P  P  P ...
-            * Layer-->      0  2  1  2  0  2  1  2  0  2  1  2  0 ...
-            * nPframes =  7, nBframes = 0, nLayers = 3
-            *
-            * Intention is to keep the intraperiod as close as possible to what is desired
-            * by the client while adjusting nPframes and nBframes to meet other constraints.
-            * eg1: Input by client: nPframes = 9, nBframes = 0, nLayers = 3
-            *    Output of this fn: nPframes = 7, nBframes = 0, nLayers = 3
-            *
-            * eg2: Input by client: nPframes = 10, nBframes = 0, nLayers = 3
-            *     Output of this fn:nPframes = 12, nBframes = 0, nLayers = 3
-            */
-            nPframes = gop_size - 1;
-        }
-    } else { /*Single-layer encoding*/
-            /*
-            * No special handling needed for single layer
-            */
-       DEBUG_PRINT_LOW("Clip num of P and B frames, nPframes: %d nBframes: %d",
-                       nPframes,nBframes);
-       if ((unsigned int)nPframes > VENC_INFINITE_GOP) {
-          nPframes =  VENC_INFINITE_GOP;
-       }
-       if ((unsigned int)nBframes > VENC_INFINITE_GOP) {
-          nBframes =  VENC_INFINITE_GOP;
-       }
-    }
-
-    DEBUG_PRINT_LOW("P/B Frames changed from: %ld/%ld to %d/%d",
-        intra_period.num_pframes, intra_period.num_bframes, nPframes, nBframes);
-    intra_period.num_pframes = nPframes;
-    intra_period.num_bframes = nBframes;
     return true;
 }
 
@@ -4354,6 +4266,34 @@ bool venc_dev::venc_set_nal_size (OMX_VIDEO_CONFIG_NALSIZE *nalSizeInfo) {
     if (ioctl(m_nDriver_fd, VIDIOC_S_CTRL, &sControl)) {
         DEBUG_PRINT_ERROR("set control: video stream format failed - %u",
                 (unsigned int)nalSizeInfo->nNaluBytes);
+        return false;
+    }
+    return true;
+}
+
+bool venc_dev::venc_superframe_enable(private_handle_t *handle)
+{
+    struct v4l2_control ctrl;
+    OMX_U32 frame_size;
+    unsigned long color_format;
+
+    ctrl.id = V4L2_CID_MPEG_VIDC_SUPERFRAME;
+    color_format = get_media_colorformat(m_sVenc_cfg.inputformat);
+    frame_size = VENUS_BUFFER_SIZE(color_format, m_sVenc_cfg.input_width, m_sVenc_cfg.input_height);
+
+    /*
+    * disable superframe if handle->size is not multiple of
+    * frame_size or if it is a single frame.
+    */
+    if (handle->size % frame_size || handle->size == frame_size) {
+        DEBUG_PRINT_ERROR("Invalid superframe handle size %d for frame size %d",
+            handle->size, frame_size);
+        return false;
+    }
+    ctrl.value = handle->size / frame_size;
+    DEBUG_PRINT_HIGH("venc_superframe_enable: %d", ctrl.value);
+    if (ioctl(m_nDriver_fd, VIDIOC_S_CTRL, &ctrl)) {
+        DEBUG_PRINT_ERROR("Failed to enable superframe, errno %d", errno);
         return false;
     }
     return true;

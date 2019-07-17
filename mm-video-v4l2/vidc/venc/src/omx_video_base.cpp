@@ -2048,14 +2048,6 @@ OMX_ERRORTYPE  omx_video::get_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                     m_sParamConsumerUsage);
                 break;
             }
-        case OMX_QTIIndexParamVideoEnableBlur:
-            {
-                VALIDATE_OMX_PARAM_DATA(paramData, OMX_QTI_VIDEO_CONFIG_BLURINFO);
-                OMX_QTI_VIDEO_CONFIG_BLURINFO *pBlurInfo =
-                    reinterpret_cast<OMX_QTI_VIDEO_CONFIG_BLURINFO *>(paramData);
-                memcpy(pBlurInfo, &m_blurInfo, sizeof(OMX_QTI_VIDEO_CONFIG_BLURINFO));
-                break;
-            }
         case OMX_IndexParamVideoSliceFMO:
         default:
             {
@@ -4339,6 +4331,7 @@ OMX_ERRORTYPE  omx_video::component_role_enum(OMX_IN OMX_HANDLETYPE hComp,
             eRet = OMX_ErrorNoMore;
         }
     } else if (!strncmp((char*)m_nkind, "OMX.qcom.video.encoder.hevc", OMX_MAX_STRINGNAME_SIZE) ||
+                !strncmp((char*)m_nkind, "OMX.qcom.video.encoder.hevc.cq", OMX_MAX_STRINGNAME_SIZE) ||
                 !strncmp((char*)m_nkind, "OMX.qcom.video.encoder.heic", OMX_MAX_STRINGNAME_SIZE)) {
         if ((0 == index) && role) {
             strlcpy((char *)role, "video_encoder.hevc", OMX_MAX_STRINGNAME_SIZE);
@@ -5351,15 +5344,6 @@ OMX_ERRORTYPE omx_video::push_input_buffer(OMX_HANDLETYPE hComp)
         } else {
             VideoGrallocMetadata *media_buffer = (VideoGrallocMetadata *)psource_frame->pBuffer;
             private_handle_t *handle = (private_handle_t *)media_buffer->pHandle;
-            bool is_venus_supported_format = (handle->format == HAL_PIXEL_FORMAT_NV12_ENCODEABLE ||
-                handle->format == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m ||
-                handle->format == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed ||
-                handle->format == QOMX_COLOR_FORMATYUV420SemiPlanarP010Venus ||
-                handle->format == QOMX_COLOR_Format32bitRGBA8888Compressed ||
-                handle->format == HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC ||
-                handle->format == HAL_PIXEL_FORMAT_NV21_ZSL ||
-                handle->format == QOMX_COLOR_FormatYVU420SemiPlanar ||
-                handle->format == HAL_PIXEL_FORMAT_NV12_HEIF);
 
             Input_pmem_info.buffer = media_buffer;
             Input_pmem_info.fd = handle->fd;
@@ -5368,10 +5352,8 @@ OMX_ERRORTYPE omx_video::push_input_buffer(OMX_HANDLETYPE hComp)
             m_graphicbuffer_size = Input_pmem_info.size;
             if (is_conv_needed(handle))
                 ret = convert_queue_buffer(hComp,Input_pmem_info,index);
-            else if (is_venus_supported_format)
-                ret = queue_meta_buffer(hComp);
             else
-                ret = OMX_ErrorBadParameter;
+                ret = queue_meta_buffer(hComp);
         }
     }
     return ret;
