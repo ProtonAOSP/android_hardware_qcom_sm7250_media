@@ -21,9 +21,9 @@ libmm-vidc-def += -D_ANDROID_ICS_
 # ---------------------------------------------------------------------------------
 
 libmm-vidc-inc      := $(LOCAL_PATH)/inc
-libmm-vidc-inc      += $(TOP)/hardware/qcom/media/mm-core/inc
-libmm-vidc-inc      += $(TOP)/hardware/qcom/media/mm-video-v4l2/vidc/vdec/inc
-libmm-vidc-inc      += $(TOP)/hardware/qcom/media/libc2dcolorconvert
+libmm-vidc-inc      += $(QCOM_MEDIA_ROOT)/mm-core/inc
+libmm-vidc-inc      += $(QCOM_MEDIA_ROOT)/mm-video-v4l2/vidc/vdec/inc
+libmm-vidc-inc      += $(QCOM_MEDIA_ROOT)/libc2dcolorconvert
 libmm-vidc-inc      += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
 libmm-vidc-inc      += $(TOP)/hardware/libhardware/include
 libmm-vidc-inc      += $(TOP)/frameworks/native/headers/media_plugin
@@ -31,8 +31,8 @@ libmm-vidc-inc      += $(TARGET_OUT_HEADERS)/qcom/display
 libmm-vidc-inc      += $(TOP)/system/core/libion/include
 
 # KONA_TODO_UPDATE: Check if we need to change the path for dispaly header files
-libmm-vidc-inc      += $(TOP)/vendor/qcom/opensource/commonsys-intf/display/gralloc
-libmm-vidc-inc      += $(TOP)/vendor/qcom/opensource/commonsys-intf/display/include
+libmm-vidc-inc      += $(QC_OPEN_PATH)/commonsys-intf/display/gralloc
+libmm-vidc-inc      += $(QC_OPEN_PATH)/commonsys-intf/display/include
 
 LOCAL_MODULE                    := libOmxVidcCommon
 LOCAL_MODULE_TAGS               := optional
