@@ -265,7 +265,7 @@ struct extradata_buffer_info {
 struct statistics {
     struct timeval prev_tv;
     int prev_fbd;
-    int bytes_generated;
+    OMX_U32 bytes_generated;
 };
 
 enum rc_modes {
@@ -368,8 +368,10 @@ class venc_dev
         bool is_gralloc_source_ubwc;
         bool is_camera_source_ubwc;
         bool is_csc_custom_matrix_enabled;
+        bool is_auto_blur_disabled;
         bool csc_enable;
         OMX_U32 fd_list[64];
+        unsigned long get_media_colorformat(unsigned long);
 
     private:
         OMX_U32                             m_codec;
@@ -424,7 +426,6 @@ class venc_dev
         bool venc_set_inloop_filter(OMX_VIDEO_AVCLOOPFILTERTYPE loop_filter);
         bool venc_set_intra_refresh ();
         bool venc_set_error_resilience(OMX_VIDEO_PARAM_ERRORCORRECTIONTYPE* error_resilience);
-        bool venc_set_voptiming_cfg(OMX_U32 nTimeIncRes);
         void venc_config_print();
         bool venc_set_extradata(OMX_U32 extra_data, OMX_BOOL enable);
         bool venc_reconfig_reqbufs();
@@ -439,7 +440,6 @@ class venc_dev
         bool venc_set_peak_bitrate(OMX_U32 nPeakBitrate);
         bool venc_set_vpx_error_resilience(OMX_BOOL enable);
         bool venc_set_batch_size(OMX_U32 size);
-        bool venc_calibrate_gop();
         bool venc_get_index_from_fd(OMX_U32 buffer_fd, OMX_U32 *index);
         bool venc_set_hierp_layers(OMX_U32 hierp_layers);
         bool venc_set_baselayerid(OMX_U32 baseid);
@@ -460,7 +460,8 @@ class venc_dev
         bool venc_set_extradata_hdr10metadata(OMX_U32 omx_profile);
         bool venc_store_dynamic_config(OMX_INDEXTYPE type, OMX_PTR config);
         bool venc_cvp_enable(private_handle_t *handle);
-        bool venc_get_cvp_metadata(private_handle_t *handle);
+        bool venc_get_cvp_metadata(private_handle_t *handle, struct v4l2_buffer *buf);
+        bool venc_superframe_enable(private_handle_t *handle);
 
         OMX_U32 pmem_free();
         OMX_U32 pmem_allocate(OMX_U32 size, OMX_U32 alignment, OMX_U32 count);

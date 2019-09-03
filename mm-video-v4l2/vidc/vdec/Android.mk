@@ -103,6 +103,14 @@ LOCAL_MODULE_TAGS               := optional
 LOCAL_VENDOR_MODULE             := true
 LOCAL_CFLAGS                    := $(libmm-vdec-def) -Werror
 
+ifeq ($(TARGET_ENABLE_VIDC_INTSAN), true)
+LOCAL_SANITIZE := integer_overflow
+ifeq ($(TARGET_ENABLE_VIDC_INTSAN_DIAG), true)
+$(warning INTSAN_DIAG_ENABLED)
+LOCAL_SANITIZE_DIAG := integer_overflow
+endif
+endif
+
 LOCAL_HEADER_LIBRARIES := \
         media_plugin_headers \
         libnativebase_headers \
@@ -141,6 +149,14 @@ LOCAL_MODULE                  := libOmxSwVdec
 LOCAL_MODULE_TAGS             := optional
 LOCAL_VENDOR_MODULE           := true
 LOCAL_CFLAGS                  := $(libmm-vdec-def)
+
+ifeq ($(TARGET_ENABLE_VIDC_INTSAN), true)
+LOCAL_SANITIZE := integer_overflow
+ifeq ($(TARGET_ENABLE_VIDC_INTSAN_DIAG), true)
+$(warning INTSAN_DIAG_ENABLED)
+LOCAL_SANITIZE_DIAG := integer_overflow
+endif
+endif
 
 LOCAL_HEADER_LIBRARIES := \
         media_plugin_headers \

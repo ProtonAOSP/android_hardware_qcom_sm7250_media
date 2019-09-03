@@ -2,6 +2,14 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
+ifeq ($(TARGET_ENABLE_VIDC_INTSAN), true)
+LOCAL_SANITIZE := integer_overflow
+ifeq ($(TARGET_ENABLE_VIDC_INTSAN_DIAG), true)
+$(warning INTSAN_DIAG_ENABLED)
+LOCAL_SANITIZE_DIAG := integer_overflow
+endif
+endif
+
 LOCAL_SRC_FILES := \
         C2DColorConverter.cpp
 
