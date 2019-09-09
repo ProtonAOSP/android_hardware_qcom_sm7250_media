@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------------
-Copyright (c) 2010 - 2018, The Linux Foundation. All rights reserved.
+Copyright (c) 2010 - 2019, The Linux Foundation. All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -181,7 +181,8 @@ extern "C" {
 #define MAX_NUM_INPUT_OUTPUT_BUFFERS VIDEO_MAX_FRAME
 #endif
 
-#define MIN_NUM_INPUT_OUTPUT_EXTRADATA_BUFFERS 32 // 32 (max cap when VPP enabled)
+// Aligning to MAX NUM INPUT & OUTPUT
+#define MIN_NUM_INPUT_OUTPUT_EXTRADATA_BUFFERS MAX_NUM_INPUT_OUTPUT_BUFFERS
 
 /* STATUS CODES */
 /* Base value for status codes */
@@ -324,7 +325,7 @@ struct vdec_output_frameinfo {
 	size_t offset;
 	size_t len;
 	uint32_t flags;
-	int64_t time_stamp;
+	uint64_t time_stamp;
 	enum vdec_picture pic_type;
 	void *client_data;
 	struct vdec_picsize picsize;
@@ -1222,6 +1223,7 @@ class omx_vdec: public qc_omx_component
                 [2] = (OMX_COLOR_FORMATTYPE)QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m,
                 [3] = (OMX_COLOR_FORMATTYPE)QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mMultiView,
                 [4] = (OMX_COLOR_FORMATTYPE)QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed,
+                [5] = OMX_COLOR_Format16bitRGB565,
             };
             return (index < sizeof(formatsNonSurfaceMode) / sizeof(OMX_COLOR_FORMATTYPE)) ?
                 formatsNonSurfaceMode[index] : OMX_COLOR_FormatMax;
@@ -1238,6 +1240,7 @@ class omx_vdec: public qc_omx_component
                     [2] = OMX_COLOR_FormatYUV420SemiPlanar,
                     [3] = OMX_COLOR_FormatYUV420Planar,
                     [4] = (OMX_COLOR_FORMATTYPE)QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mMultiView,
+                    [5] = OMX_COLOR_Format16bitRGB565,
                 };
                 format = (index < sizeof(formatsDefault) / sizeof(OMX_COLOR_FORMATTYPE)) ?
                     formatsDefault[index] : OMX_COLOR_FormatMax;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012 - 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012 - 2019, The Linux Foundation. All rights reserved.
  *
  * redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -303,7 +303,6 @@ bool C2DColorConverter::isYUVSurface(ColorConvertFormat format)
         case YCbCr420P:
         case YCrCb420P:
         case NV12_2K:
-        case NV12_512:
         case NV12_128m:
         case NV12_UBWC:
         case TP10_UBWC:
@@ -486,7 +485,6 @@ uint32_t C2DColorConverter::getC2DFormat(ColorConvertFormat format, bool isSourc
             return (C2D_COLOR_FORMAT_420_NV12 | C2D_FORMAT_MACROTILED);
         case YCbCr420SP:
         case NV12_2K:
-        case NV12_512:
         case NV12_128m:
             return C2D_COLOR_FORMAT_420_NV12;
         case YCbCr420P:
@@ -519,10 +517,8 @@ size_t C2DColorConverter::calcStride(ColorConvertFormat format, size_t width)
             return ALIGN(width, ALIGN16);
         case NV12_2K:
             return ALIGN(width, ALIGN16);
-        case NV12_512:
-            return ALIGN(width, ALIGN512);
         case NV12_128m:
-            return ALIGN(width, ALIGN128);
+            return ALIGN(width, ALIGN512);
         case YCbCr420P:
             return ALIGN(width, ALIGN16);
         case YCrCb420P:
@@ -553,10 +549,8 @@ size_t C2DColorConverter::calcYSize(ColorConvertFormat format, size_t width, siz
             size_t lumaSize = ALIGN(alignedw * height, ALIGN2K);
             return lumaSize;
         }
-        case NV12_512:
-            return ALIGN(width, ALIGN512) * ALIGN(height, ALIGN512);
         case NV12_128m:
-            return ALIGN(width, ALIGN128) * ALIGN(height, ALIGN32);
+            return ALIGN(width, ALIGN512) * ALIGN(height, ALIGN512);
         case NV12_UBWC:
             return ALIGN( VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, width) *
                     VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC, height), ALIGN4K) +
@@ -635,15 +629,10 @@ size_t C2DColorConverter::calcSize(ColorConvertFormat format, size_t width, size
                                                    __FUNCTION__, width, height, size);
             }
             break;
-        case NV12_512:
+        case NV12_128m:
             alignedw = ALIGN(width, ALIGN512);
             alignedh = ALIGN(height, ALIGN512);
             size = ALIGN(alignedw * alignedh + (alignedw * ALIGN((height+1)/2, ALIGN256)), ALIGN4K);
-            break;
-        case NV12_128m:
-            alignedw = ALIGN(width, ALIGN128);
-            alignedh = ALIGN(height, ALIGN32);
-            size = ALIGN(alignedw * alignedh + (alignedw * ALIGN((height+1)/2, ALIGN16)), ALIGN4K);
             break;
         case NV12_UBWC:
             size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_UBWC, width, height);
@@ -706,9 +695,8 @@ bool C2DColorConverter::getBuffFilledLen(int32_t port, unsigned int &filled_leng
   C2DBuffReq req;
   if (enabled) {
     ret = getBuffReq(port, &req);
-    if (ret && req.bpp.denominator > 0) {
-      filled_length = (req.stride * req.sliceHeight * req.bpp.numerator);
-      filled_length /= req.bpp.denominator;
+    if (ret) {
+      filled_length = req.size;
     }
   }
 
@@ -751,10 +739,8 @@ size_t C2DColorConverter::calcLumaAlign(ColorConvertFormat format) {
     switch (format) {
         case NV12_2K:
           return ALIGN2K;
-        case NV12_512:
-          return ALIGN512;
         case NV12_128m:
-          return 1;
+          return ALIGN512;
         case NV12_UBWC:
         case TP10_UBWC:
           return ALIGN4K;
@@ -772,7 +758,6 @@ size_t C2DColorConverter::calcSizeAlign(ColorConvertFormat format) {
         case YCbCr420SP: //OR NV12
         case YCbCr420P:
         case NV12_2K:
-        case NV12_512:
         case NV12_128m:
         case NV12_UBWC:
         case TP10_UBWC:
@@ -802,7 +787,6 @@ C2DBytesPerPixel C2DColorConverter::calcBytesPerPixel(ColorConvertFormat format)
         case YCrCb420P:
         case YCbCr420Tile:
         case NV12_2K:
-        case NV12_512:
         case NV12_128m:
         case NV12_UBWC:
         case TP10_UBWC:
