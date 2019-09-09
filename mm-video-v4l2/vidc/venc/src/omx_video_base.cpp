@@ -291,7 +291,6 @@ omx_video::omx_video():
     mMapPixelFormat2Converter.insert({
             {HAL_PIXEL_FORMAT_RGBA_8888, RGBA8888},
             {HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC, NV12_UBWC},
-            {HAL_PIXEL_FORMAT_NV12_HEIF, NV12_512},
                 });
 
     pthread_mutex_init(&m_lock, NULL);
@@ -1676,6 +1675,17 @@ OMX_ERRORTYPE  omx_video::get_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                 OMX_VIDEO_PARAM_ANDROID_IMAGEGRIDTYPE* pParam =
                     (OMX_VIDEO_PARAM_ANDROID_IMAGEGRIDTYPE*)paramData;
                 DEBUG_PRINT_LOW("get_parameter: OMX_IndexParamVideoAndroidImageGrid");
+                m_sParamAndroidImageGrid.bEnabled = OMX_TRUE;
+                m_sParamAndroidImageGrid.nTileWidth = DEFAULT_TILE_DIMENSION;
+                m_sParamAndroidImageGrid.nTileHeight = DEFAULT_TILE_DIMENSION;
+                m_sParamAndroidImageGrid.nGridRows =
+                    m_sInPortDef.format.video.nFrameHeight > 0 ?
+                    ((m_sInPortDef.format.video.nFrameHeight - 1) / DEFAULT_TILE_DIMENSION + 1) :
+                    DEFAULT_TILE_ROWS;
+                m_sParamAndroidImageGrid.nGridCols =
+                    m_sInPortDef.format.video.nFrameWidth > 0 ?
+                    ((m_sInPortDef.format.video.nFrameWidth - 1) / DEFAULT_TILE_DIMENSION + 1) :
+                    DEFAULT_TILE_COLS;
                 memcpy(pParam, &m_sParamAndroidImageGrid, sizeof(m_sParamAndroidImageGrid));
                 break;
             }
@@ -2046,14 +2056,6 @@ OMX_ERRORTYPE  omx_video::get_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                 memcpy(consumerUsage, &m_sParamConsumerUsage, sizeof(m_sParamConsumerUsage));
                 DEBUG_PRINT_LOW("get_parameter: OMX_IndexParamConsumerUsageBits %x",
                     m_sParamConsumerUsage);
-                break;
-            }
-        case OMX_QTIIndexParamVideoEnableBlur:
-            {
-                VALIDATE_OMX_PARAM_DATA(paramData, OMX_QTI_VIDEO_CONFIG_BLURINFO);
-                OMX_QTI_VIDEO_CONFIG_BLURINFO *pBlurInfo =
-                    reinterpret_cast<OMX_QTI_VIDEO_CONFIG_BLURINFO *>(paramData);
-                memcpy(pBlurInfo, &m_blurInfo, sizeof(OMX_QTI_VIDEO_CONFIG_BLURINFO));
                 break;
             }
         case OMX_IndexParamVideoSliceFMO:
@@ -4339,6 +4341,7 @@ OMX_ERRORTYPE  omx_video::component_role_enum(OMX_IN OMX_HANDLETYPE hComp,
             eRet = OMX_ErrorNoMore;
         }
     } else if (!strncmp((char*)m_nkind, "OMX.qcom.video.encoder.hevc", OMX_MAX_STRINGNAME_SIZE) ||
+                !strncmp((char*)m_nkind, "OMX.qcom.video.encoder.hevc.cq", OMX_MAX_STRINGNAME_SIZE) ||
                 !strncmp((char*)m_nkind, "OMX.qcom.video.encoder.heic", OMX_MAX_STRINGNAME_SIZE)) {
         if ((0 == index) && role) {
             strlcpy((char *)role, "video_encoder.hevc", OMX_MAX_STRINGNAME_SIZE);
@@ -5123,7 +5126,7 @@ OMX_ERRORTYPE  omx_video::empty_this_buffer_opaque(OMX_IN OMX_HANDLETYPE hComp,
                                private_handle_t::PRIV_FLAGS_ITU_R_601_FR : 0;
 
         if (m_sOutPortDef.format.video.eCompressionFormat == OMX_VIDEO_CodingImageHEIC)
-            c2dDestFmt = NV12_512;
+            c2dDestFmt = NV12_128m;
 
         if (c2dcc.getConversionNeeded() &&
             c2dcc.isPropChanged(m_sInPortDef.format.video.nFrameWidth,
@@ -5351,15 +5354,6 @@ OMX_ERRORTYPE omx_video::push_input_buffer(OMX_HANDLETYPE hComp)
         } else {
             VideoGrallocMetadata *media_buffer = (VideoGrallocMetadata *)psource_frame->pBuffer;
             private_handle_t *handle = (private_handle_t *)media_buffer->pHandle;
-            bool is_venus_supported_format = (handle->format == HAL_PIXEL_FORMAT_NV12_ENCODEABLE ||
-                handle->format == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m ||
-                handle->format == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed ||
-                handle->format == QOMX_COLOR_FORMATYUV420SemiPlanarP010Venus ||
-                handle->format == QOMX_COLOR_Format32bitRGBA8888Compressed ||
-                handle->format == HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC ||
-                handle->format == HAL_PIXEL_FORMAT_NV21_ZSL ||
-                handle->format == QOMX_COLOR_FormatYVU420SemiPlanar ||
-                handle->format == HAL_PIXEL_FORMAT_NV12_HEIF);
 
             Input_pmem_info.buffer = media_buffer;
             Input_pmem_info.fd = handle->fd;
@@ -5368,10 +5362,8 @@ OMX_ERRORTYPE omx_video::push_input_buffer(OMX_HANDLETYPE hComp)
             m_graphicbuffer_size = Input_pmem_info.size;
             if (is_conv_needed(handle))
                 ret = convert_queue_buffer(hComp,Input_pmem_info,index);
-            else if (is_venus_supported_format)
-                ret = queue_meta_buffer(hComp);
             else
-                ret = OMX_ErrorBadParameter;
+                ret = queue_meta_buffer(hComp);
         }
     }
     return ret;

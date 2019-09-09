@@ -264,6 +264,12 @@ OMX_ERRORTYPE omx_swvdec::component_init(OMX_STRING cmp_name)
             goto component_init_exit;
         }
 
+        if ((retval_swvdec = swvdec_check_inst_load(m_swvdec_handle)) !=
+            SWVDEC_STATUS_SUCCESS)
+        {
+            retval = retval_swvdec2omx(retval_swvdec);
+            goto component_init_exit;
+        }
         m_swvdec_created = true;
 
         if ((retval = set_frame_dimensions(DEFAULT_FRAME_WIDTH,
@@ -3199,11 +3205,11 @@ OMX_ERRORTYPE omx_swvdec::describe_color_format(
             /**
              * alignment factors:
              *
-             * - stride:    128
-             * - scanlines:  32
+             * - stride:    512
+             * - scanlines: 512
              */
-            stride    = ALIGN(p_img->mWidth,  128);
-            scanlines = ALIGN(p_img->mHeight,  32);
+            stride    = VENUS_Y_STRIDE(COLOR_FMT_NV12, p_img->mWidth);
+            scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, p_img->mHeight);
 
             p_img->mBitDepth = 8;
 
