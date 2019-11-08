@@ -3252,7 +3252,7 @@ OMX_ERRORTYPE  omx_vdec::set_config(OMX_IN OMX_HANDLETYPE      hComp,
         control.value = rate->nU32;
 
         if (ioctl(drv_ctx.video_driver_fd, VIDIOC_S_CTRL, &control)) {
-            ret = errno == -EBUSY ? OMX_ErrorInsufficientResources :
+            ret = errno == EBUSY ? OMX_ErrorInsufficientResources :
                     OMX_ErrorUnsupportedSetting;
             DEBUG_PRINT_ERROR("Failed to set operating rate %u fps (%s)",
                     rate->nU32 >> 16, errno == -EBUSY ? "HW Overload" : strerror(errno));
@@ -7181,8 +7181,7 @@ OMX_ERRORTYPE omx_vdec::update_portdef(OMX_PARAM_PORTDEFINITIONTYPE *portDefn)
             return OMX_ErrorHardware;
         }
         drv_ctx.ip_buf.mincount = control.value;
-        if (drv_ctx.ip_buf.actualcount < control.value)
-            drv_ctx.ip_buf.actualcount = control.value;
+        drv_ctx.ip_buf.actualcount = control.value;
 
         portDefn->eDir =  OMX_DirInput;
         portDefn->nBufferCountActual = drv_ctx.ip_buf.actualcount;
@@ -7522,7 +7521,7 @@ void omx_vdec::set_frame_rate(OMX_S64 act_timestamp)
 {
     OMX_U32 new_frame_interval = 0;
     if (VALID_TS(act_timestamp) && VALID_TS(prev_ts) && act_timestamp != prev_ts
-            && llabs(act_timestamp - prev_ts) > 2000) {
+            && (llabs(act_timestamp - prev_ts) > 2000 || frm_int == 0)) {
         new_frame_interval = client_set_fps ? frm_int : (act_timestamp - prev_ts) > 0 ?
             llabs(act_timestamp - prev_ts) : llabs(act_timestamp - prev_ts_actual);
         if (new_frame_interval != frm_int || frm_int == 0) {
