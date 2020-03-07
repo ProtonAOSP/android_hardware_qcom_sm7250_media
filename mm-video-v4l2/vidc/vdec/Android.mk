@@ -73,9 +73,6 @@ libmm-vdec-inc      	+= $(TARGET_OUT_HEADERS)/mm-video/SwVdec
 libmm-vdec-inc      	+= $(TARGET_OUT_HEADERS)/mm-video/swvdec
 libmm-vdec-inc      	+= $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
 
-# TODO: Check if we need to change the path for dispaly header files
-libmm-vdec-inc      	+= $(QC_OPEN_PATH)/commonsys-intf/display/gralloc
-libmm-vdec-inc      	+= $(QC_OPEN_PATH)/commonsys-intf/display/include
 
 ifeq ($(PLATFORM_SDK_VERSION), 18)  #JB_MR2
 libmm-vdec-def += -DANDROID_JELLYBEAN_MR2=1
