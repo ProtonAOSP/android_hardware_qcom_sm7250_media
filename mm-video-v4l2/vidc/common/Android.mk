@@ -30,9 +30,6 @@ libmm-vidc-inc      += $(TOP)/frameworks/native/headers/media_plugin
 libmm-vidc-inc      += $(TARGET_OUT_HEADERS)/qcom/display
 libmm-vidc-inc      += $(TOP)/system/memory/libion/include
 
-# KONA_TODO_UPDATE: Check if we need to change the path for dispaly header files
-libmm-vidc-inc      += $(QC_OPEN_PATH)/commonsys-intf/display/gralloc
-libmm-vidc-inc      += $(QC_OPEN_PATH)/commonsys-intf/display/include
 
 LOCAL_MODULE                    := libOmxVidcCommon
 LOCAL_MODULE_TAGS               := optional
