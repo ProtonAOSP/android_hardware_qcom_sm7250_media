@@ -29,6 +29,7 @@ libmm-vidc-inc      += $(TOP)/hardware/libhardware/include
 libmm-vidc-inc      += $(TOP)/frameworks/native/headers/media_plugin
 libmm-vidc-inc      += $(TARGET_OUT_HEADERS)/qcom/display
 libmm-vidc-inc      += $(TOP)/system/memory/libion/include
+libmm-vidc-inc      += $(TOP)/system/memory/libion/kernel-headers
 
 
 LOCAL_MODULE                    := libOmxVidcCommon
