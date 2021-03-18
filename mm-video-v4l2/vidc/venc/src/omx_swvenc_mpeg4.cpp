@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------------
-Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -598,10 +598,10 @@ OMX_ERRORTYPE  omx_venc::set_parameter
                 }
 
                 /* set the frame attributes */
-                /*Align stide and scanline to worst case*/
+                /*Align stride and scanline to worst case*/
                 /*------------------------------------------------------------------------------------------
                 *           [Color Format]                   [Stride Alignment]        [Scanline Alignment]
-                * QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m       512                         512
+                * QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m       512 or 128                  512 or 32
                 * OMX_COLOR_FormatYUV420SemiPlanar                 512                         512
                 * QOMX_COLOR_FormatYVU420SemiPlanar                16                          16
                 * HAL_PIXEL_FORMAT_NV21_ZSL                        64                          64
@@ -2774,6 +2774,20 @@ bool omx_venc::dev_get_dimensions(OMX_U32 index, OMX_U32 *width, OMX_U32 *height
    (void)index;
    (void)width;
    (void)height;
+
+   RETURN(true);
+}
+
+bool omx_venc::dev_is_meta_mode()
+{
+   ENTER_FUNC();
+
+   RETURN(true);
+}
+
+bool omx_venc::dev_is_avtimer_needed()
+{
+   ENTER_FUNC();
 
    RETURN(true);
 }
